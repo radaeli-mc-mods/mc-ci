@@ -1,0 +1,10 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions: {contents: read}
+jobs:
+  release:
+    uses: radaeli-mc-mods/mc-ci/.github/workflows/mod-release.yml@v1
+    secrets:
+      CURSEFORGE_TOKEN: '${{ secrets.CURSEFORGE_TOKEN }}'

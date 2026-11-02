@@ -1,0 +1,15 @@
+name: Read mod pipeline config
+description: Validate mod pipeline settings
+outputs:
+  matrix: {description: Target matrix, value: '${{ steps.config.outputs.matrix }}'}
+  java: {description: JDK list, value: '${{ steps.config.outputs.java }}'}
+  checks: {description: Checks as JSON, value: '${{ steps.config.outputs.checks }}'}
+  display-name: {description: Display name, value: '${{ steps.config.outputs.display-name }}'}
+  project-id: {description: CurseForge project ID, value: '${{ steps.config.outputs.project-id }}'}
+  release-type: {description: Release type, value: '${{ steps.config.outputs.release-type }}'}
+runs:
+  using: composite
+  steps:
+    - id: config
+      shell: bash
+      run: python3 "$GITHUB_ACTION_PATH/../../scripts/config.py"

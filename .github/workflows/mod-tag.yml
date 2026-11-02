@@ -1,0 +1,50 @@
+name: Tag mod version
+on:
+  workflow_call:
+    secrets:
+      RELEASE_APP_PRIVATE_KEY: {required: true}
+permissions: {contents: read}
+concurrency:
+  group: mod-tag-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: actions/checkout@v7
+        with:
+          repository: radaeli-mc-mods/mc-ci
+          ref: main
+          path: .mc-ci
+          persist-credentials: false
+      - id: version
+        run: |
+          version=$(bash .mc-ci/scripts/read-version.sh)
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if git show-ref --verify --quiet "refs/tags/v$version"; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag v$version already exists; no release created"
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          fi
+      - id: app
+        if: steps.version.outputs.exists == 'false'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: '${{ vars.RELEASE_APP_ID }}'
+          private-key: '${{ secrets.RELEASE_APP_PRIVATE_KEY }}'
+          owner: '${{ github.repository_owner }}'
+          repositories: '${{ github.event.repository.name }}'
+          permission-contents: write
+      - name: Create annotated tag
+        if: steps.version.outputs.exists == 'false'
+        env:
+          GH_TOKEN: '${{ steps.app.outputs.token }}'
+          TAG: '${{ steps.version.outputs.tag }}'
+          TARGET_SHA: '${{ github.sha }}'
+          REPOSITORY: '${{ github.repository }}'
+        run: |
+          tag_object=$(jq -n --arg tag "$TAG" --arg sha "$TARGET_SHA" '{tag:$tag,message:("Release " + $tag),object:$sha,type:"commit"}' | gh api --method POST "repos/$REPOSITORY/git/tags" --input - --jq .sha)
+          jq -n --arg tag "$TAG" --arg sha "$tag_object" '{ref:("refs/tags/"+$tag),sha:$sha}' | gh api --method POST "repos/$REPOSITORY/git/refs" --input -

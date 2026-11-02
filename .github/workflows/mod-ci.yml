@@ -1,0 +1,102 @@
+name: Mod CI
+on:
+  workflow_call:
+permissions: {contents: read}
+concurrency:
+  group: mod-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: '${{ steps.config.outputs.matrix }}'
+      java: '${{ steps.config.outputs.java }}'
+      checks: '${{ steps.config.outputs.checks }}'
+    steps:
+      - uses: actions/checkout@v7
+        with: {persist-credentials: false}
+      - uses: radaeli-mc-mods/mc-ci/actions/read-config@main
+        id: config
+  checks:
+    needs: config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: {persist-credentials: false}
+      - uses: radaeli-mc-mods/mc-ci/actions/setup-build@main
+        with: {java: '${{ needs.config.outputs.java }}'}
+      - name: Run checks
+        env: {CHECKS: '${{ needs.config.outputs.checks }}'}
+        run: |
+          mapfile -t tasks < <(jq -r '.[]' <<< "$CHECKS")
+          if (( ${#tasks[@]} )); then ./gradlew "${tasks[@]}" --console=plain --stacktrace; fi
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: reports
+          path: '**/build/reports/**'
+          if-no-files-found: ignore
+  build:
+    needs: config
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: '${{ fromJSON(needs.config.outputs.matrix) }}'
+    steps:
+      - uses: actions/checkout@v7
+        with: {persist-credentials: false}
+      - uses: actions/checkout@v7
+        with:
+          repository: radaeli-mc-mods/mc-ci
+          ref: main
+          path: .mc-ci
+          persist-credentials: false
+      - uses: radaeli-mc-mods/mc-ci/actions/setup-build@main
+        with: {java: '${{ needs.config.outputs.java }}'}
+      - name: Build
+        env: {TASK: '${{ matrix.task }}'}
+        run: ./gradlew "$TASK" --console=plain --stacktrace
+      - name: Collect jars
+        env: {FILES: '${{ toJSON(matrix.files) }}'}
+        run: python3 .mc-ci/scripts/collect-files.py "$FILES" "$RUNNER_TEMP/jars"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jars-${{ matrix.id }}
+          path: '${{ runner.temp }}/jars/*.jar'
+          if-no-files-found: error
+          retention-days: 7
+  release-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: actions/checkout@v7
+        with:
+          repository: radaeli-mc-mods/mc-ci
+          ref: main
+          path: .mc-ci
+          persist-credentials: false
+      - name: Preview
+        shell: bash
+        run: |
+          version=$(bash .mc-ci/scripts/read-version.sh)
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tagged=$(git rev-parse "refs/tags/$tag^{commit}")
+            base=${{ github.event.pull_request.base.sha || github.sha }}
+            if [[ $tagged != "$base" ]] && ! git merge-base --is-ancestor "$tagged" "$base"; then
+              echo "::error::Existing tag $tag does not belong to the base history"; exit 1
+            fi
+            echo "Tag $tag already exists; no release will be created." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "A merge will create tag $tag." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if ! bash .mc-ci/scripts/changelog-section.sh "$version" >/dev/null; then echo "::warning::No changelog section for $version"; fi
+  result:
+    if: always()
+    needs: [config, checks, build, release-preview]
+    runs-on: ubuntu-latest
+    env:
+      RESULTS: '${{ toJSON(needs) }}'
+    steps:
+      - run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS" >/dev/null

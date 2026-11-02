@@ -1,0 +1,134 @@
+name: Release mod
+on:
+  workflow_call:
+    inputs:
+      run-checks: {type: boolean, default: true}
+    secrets:
+      CURSEFORGE_TOKEN: {required: true}
+permissions: {contents: read}
+concurrency:
+  group: mod-release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: '${{ steps.config.outputs.matrix }}'
+      java: '${{ steps.config.outputs.java }}'
+      checks: '${{ steps.config.outputs.checks }}'
+      name: '${{ steps.config.outputs.display-name }}'
+      project: '${{ steps.config.outputs.project-id }}'
+      version: '${{ steps.meta.outputs.version }}'
+      type: '${{ steps.meta.outputs.type }}'
+      changelog: '${{ steps.meta.outputs.changelog }}'
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: actions/checkout@v7
+        with:
+          repository: radaeli-mc-mods/mc-ci
+          ref: main
+          path: .mc-ci
+          persist-credentials: false
+      - id: config
+        uses: radaeli-mc-mods/mc-ci/actions/read-config@main
+      - id: meta
+        env:
+          RELEASE_TYPE: '${{ steps.config.outputs.release-type }}'
+          REF_NAME: '${{ github.ref_name }}'
+          REPOSITORY: '${{ github.repository }}'
+        run: |
+          version=$(bash .mc-ci/scripts/read-version.sh)
+          [[ "$REF_NAME" == "v$version" ]] || { echo '::error::Tag does not match mod_version'; exit 1; }
+          type=$RELEASE_TYPE
+          if [[ $type == auto ]]; then
+            case "$version" in *-alpha*) type=alpha;; *-beta*|*-rc*) type=beta;; *) type=release;; esac
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "type=$type" >> "$GITHUB_OUTPUT"
+          if ! bash .mc-ci/scripts/changelog-section.sh "$version" > "$RUNNER_TEMP/changelog"; then
+            previous=$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)
+            if [[ -n $previous ]]; then printf 'Changes: https://github.com/%s/compare/%s...%s\n' "$REPOSITORY" "$previous" "$REF_NAME" > "$RUNNER_TEMP/changelog"; else printf 'Changes: https://github.com/%s/tree/%s\n' "$REPOSITORY" "$REF_NAME" > "$RUNNER_TEMP/changelog"; fi
+          fi
+          delimiter=$(openssl rand -hex 16)
+          { echo "changelog<<$delimiter"; cat "$RUNNER_TEMP/changelog"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: '${{ fromJSON(needs.prepare.outputs.matrix) }}'
+    steps:
+      - uses: actions/checkout@v7
+        with: {persist-credentials: false}
+      - uses: actions/checkout@v7
+        with:
+          repository: radaeli-mc-mods/mc-ci
+          ref: main
+          path: .mc-ci
+          persist-credentials: false
+      - uses: radaeli-mc-mods/mc-ci/actions/setup-build@main
+        with: {java: '${{ needs.prepare.outputs.java }}'}
+      - name: Checks and build
+        env:
+          CHECKS: '${{ needs.prepare.outputs.checks }}'
+          RUN_CHECKS: '${{ inputs.run-checks }}'
+          TASK: '${{ matrix.task }}'
+        run: |
+          mapfile -t tasks < <(jq -r '.[]' <<< "$CHECKS")
+          if [[ $RUN_CHECKS == true ]] && (( ${#tasks[@]} )); then ./gradlew "${tasks[@]}" --console=plain --stacktrace; fi
+          ./gradlew "$TASK" --console=plain --stacktrace
+      - id: collect
+        env: {FILES: '${{ toJSON(matrix.files) }}'}
+        run: |
+          python3 .mc-ci/scripts/collect-files.py "$FILES" "$RUNNER_TEMP/jars"
+          sha256sum "$RUNNER_TEMP"/jars/*.jar >> "$GITHUB_STEP_SUMMARY"
+      - name: Save primary name
+        env: {PRIMARY: '${{ steps.collect.outputs.primary }}'}
+        run: printf '%s\n' "$PRIMARY" > "$RUNNER_TEMP/jars/primary.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jars-${{ matrix.id }}
+          path: '${{ runner.temp }}/jars/*'
+          if-no-files-found: error
+          retention-days: 90
+  publish:
+    needs: [prepare, build]
+    environment: curseforge
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: '${{ fromJSON(needs.prepare.outputs.matrix) }}'
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: jars-${{ matrix.id }}
+          path: jars
+      - id: files
+        run: |
+          primary=$(cat jars/primary.txt)
+          { echo 'files<<MC_CI_FILES'; echo "jars/$primary"; find jars -maxdepth 1 -name '*.jar' ! -name "$primary" -print | sort; echo 'MC_CI_FILES'; } >> "$GITHUB_OUTPUT"
+      - id: metadata
+        env:
+          LOADERS: '${{ toJSON(matrix.loaders) }}'
+          VERSIONS: '${{ toJSON(matrix.gameVersions) }}'
+          DEPENDENCIES: '${{ toJSON(matrix.dependencies) }}'
+        run: |
+          for key in LOADERS VERSIONS DEPENDENCIES; do
+            { echo "${key,,}<<MC_CI_LIST"; jq -r '.[]' <<< "${!key}"; echo MC_CI_LIST; } >> "$GITHUB_OUTPUT"
+          done
+      - name: Publish to CurseForge
+        uses: Kira-NT/mc-publish@c23376546a97f5ba7984e94445da359459b14419 # v3.3.2
+        with:
+          curseforge-id: '${{ needs.prepare.outputs.project }}'
+          curseforge-token: '${{ secrets.CURSEFORGE_TOKEN }}'
+          files: '${{ steps.files.outputs.files }}'
+          name: "${{ needs.prepare.outputs.name }} ${{ needs.prepare.outputs.version }} (${{ join(matrix.loaders, ', ') }} ${{ join(matrix.gameVersions, ', ') }})"
+          version: '${{ needs.prepare.outputs.version }}+${{ matrix.id }}'
+          version-type: '${{ needs.prepare.outputs.type }}'
+          changelog: '${{ needs.prepare.outputs.changelog }}'
+          loaders: '${{ steps.metadata.outputs.loaders }}'
+          game-versions: '${{ steps.metadata.outputs.versions }}'
+          java: '${{ matrix.java }}'
+          dependencies: '${{ steps.metadata.outputs.dependencies }}'
+          retry-attempts: 2

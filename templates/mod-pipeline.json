@@ -1,0 +1,8 @@
+{
+  "$schema": "https://raw.githubusercontent.com/radaeli-mc-mods/mc-ci/v1/schemas/mod-pipeline.schema.json",
+  "displayName": "Example Mod",
+  "java": [21],
+  "checks": ["check"],
+  "curseforge": {"projectId": "123456", "releaseType": "auto"},
+  "targets": [{"id": "neoforge-1.21.1", "task": "build", "files": ["build/libs/*.jar"], "loaders": ["neoforge"], "gameVersions": ["1.21.1"], "java": 21, "dependencies": []}]
+}
