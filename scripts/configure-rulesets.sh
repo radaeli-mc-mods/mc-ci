@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
-usage='Usage: configure-rulesets.sh OWNER/REPO APP_ID "CONFIRMED_STATUS_CONTEXT" [--apply]'
-[[ $# -eq 3 || ( $# -eq 4 && $4 == --apply ) ]] || { echo "$usage" >&2; exit 2; }
-repo=$1; app_id=$2; status=$3; apply=${4:-}
+usage='Usage: configure-rulesets.sh OWNER/REPO APP_ID "CONFIRMED_STATUS_CONTEXT" [--extra-status "CONTEXT"]... [--apply]'
+[[ $# -ge 3 ]] || { echo "$usage" >&2; exit 2; }
+repo=$1; app_id=$2; status=$3; shift 3
+apply=; extras=()
+while (( $# )); do
+  case "$1" in
+    --apply) apply=--apply; shift;;
+    --extra-status) [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 2; }; extras+=(--extra-status "$2"); shift 2;;
+    *) echo "$usage" >&2; exit 2;;
+  esac
+done
 [[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && $app_id =~ ^[0-9]+$ ]] || { echo 'Invalid repository or App ID' >&2; exit 2; }
 root=$(cd "$(dirname "$0")/.." && pwd)
-payload=$(python3 "$root/scripts/rulesets.py" --app-id "$app_id" --status "$status")
+payload=$(python3 "$root/scripts/rulesets.py" --app-id "$app_id" --status "$status" "${extras[@]}")
 echo "$payload" | jq .
 if [[ $apply != --apply ]]; then echo 'Dry run; verify the status context in a successful canary PR before using --apply.'; exit; fi
 existing=$(gh api --paginate "repos/$repo/rulesets?per_page=100" --jq '.[].name')

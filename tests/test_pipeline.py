@@ -7,12 +7,12 @@ rules_spec=importlib.util.spec_from_file_location('rulesets',root/'scripts/rules
 rules_module=importlib.util.module_from_spec(rules_spec); rules_spec.loader.exec_module(rules_module)
 class PipelineTests(unittest.TestCase):
     def test_release_app_cannot_bypass_tag_immutability(self):
-        branch, creation, immutable=rules_module.rulesets(42,'ci / result')
+        branch, creation, immutable=rules_module.rulesets(42,'ci / result',['Verify without Copycats+'])
         self.assertEqual([r['type'] for r in creation['rules']],['creation'])
         self.assertEqual({r['type'] for r in immutable['rules']},{'update','deletion'})
         self.assertTrue(any(a.get('actor_id')==42 for a in creation['bypass_actors']))
         self.assertFalse(any(a.get('actor_id')==42 for a in immutable['bypass_actors']))
-        self.assertEqual(branch['rules'][1]['parameters']['required_status_checks'][0]['context'],'ci / result')
+        self.assertEqual([c['context'] for c in branch['rules'][1]['parameters']['required_status_checks']],['ci / result','Verify without Copycats+'])
     def setUp(self): self.data=json.loads((root/'templates/mod-pipeline.json').read_text(encoding='utf-8'))
     def test_example(self): config.validate(self.data)
     def test_duplicate_ids(self):
