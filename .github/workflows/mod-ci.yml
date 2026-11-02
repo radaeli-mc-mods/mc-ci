@@ -78,18 +78,25 @@ jobs:
           persist-credentials: false
       - name: Preview
         shell: bash
+        env:
+          BASE_SHA: '${{ github.event.pull_request.base.sha || github.sha }}'
         run: |
           version=$(bash .mc-ci/scripts/read-version.sh)
           tag="v$version"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             tagged=$(git rev-parse "refs/tags/$tag^{commit}")
-            base=${{ github.event.pull_request.base.sha || github.sha }}
-            if [[ $tagged != "$base" ]] && ! git merge-base --is-ancestor "$tagged" "$base"; then
+            if [[ $tagged != "$BASE_SHA" ]] && ! git merge-base --is-ancestor "$tagged" "$BASE_SHA"; then
               echo "::error::Existing tag $tag does not belong to the base history"; exit 1
             fi
             echo "Tag $tag already exists; no release will be created." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "A merge will create tag $tag." >> "$GITHUB_STEP_SUMMARY"
+            git show "$BASE_SHA:gradle.properties" > "$RUNNER_TEMP/base-gradle.properties"
+            base_version=$(bash .mc-ci/scripts/read-version.sh "$RUNNER_TEMP/base-gradle.properties")
+            if [[ $base_version == "$version" ]]; then
+              echo "Version unchanged ($version); no release will be created." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "A merge will create tag $tag." >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           if ! bash .mc-ci/scripts/changelog-section.sh "$version" >/dev/null; then echo "::warning::No changelog section for $version"; fi
   result:

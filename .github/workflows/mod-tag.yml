@@ -20,9 +20,23 @@ jobs:
           path: .mc-ci
           persist-credentials: false
       - id: version
+        env:
+          BEFORE_SHA: '${{ github.event.before }}'
         run: |
           version=$(bash .mc-ci/scripts/read-version.sh)
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [[ -z $BEFORE_SHA || $BEFORE_SHA =~ ^0+$ ]]; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo '::notice::No previous commit; skipping automatic tagging'
+            exit 0
+          fi
+          git show "$BEFORE_SHA:gradle.properties" > "$RUNNER_TEMP/previous-gradle.properties"
+          previous=$(bash .mc-ci/scripts/read-version.sh "$RUNNER_TEMP/previous-gradle.properties")
+          if [[ $previous == "$version" ]]; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo "::notice::Version unchanged ($version); no release created"
+            exit 0
+          fi
           if git show-ref --verify --quiet "refs/tags/v$version"; then
             echo 'exists=true' >> "$GITHUB_OUTPUT"
             echo "::notice::Tag v$version already exists; no release created"

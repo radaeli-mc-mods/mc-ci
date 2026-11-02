@@ -5,7 +5,7 @@ Reusable GitHub Actions pipelines for Minecraft mods in `radaeli-mc-mods`. This 
 ## Pipeline
 
 - Pull requests run the configured checks and a build for each target; jars are retained for seven days. The `result` job aggregates the checks.
-- A push to the default branch creates an annotated `v<mod_version>` tag when that tag does not already exist. A GitHub App token causes the tag push to trigger the release workflow.
+- A push to the default branch creates an annotated `v<mod_version>` tag only when `mod_version` changed from the previous commit and the tag does not already exist. A newly created branch does not create a tag. A GitHub App token causes the tag push to trigger the release workflow.
 - A matching tag runs the build and waits for approval of the `curseforge` environment before uploading to CurseForge. Jars are retained for 90 days; this pipeline does not create GitHub Releases.
 
 The reusable workflows and composites currently refer to `main` internally. Before cutting `v1.0.0` and `v1`, update those internal references to `v1`, validate the resulting commit using an appropriate canary, and then tag it. Keep major tags current only after verification. A moving major is a trust boundary: protect its tag and review changes to this repository.
