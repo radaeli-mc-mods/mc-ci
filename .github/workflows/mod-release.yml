@@ -5,6 +5,7 @@ on:
       run-checks: {type: boolean, default: true}
     secrets:
       CURSEFORGE_TOKEN: {required: true}
+      CURSEFORGE_API_KEY: {required: false}
 permissions: {contents: read}
 concurrency:
   group: mod-release-${{ github.repository }}-${{ github.ref }}
@@ -19,7 +20,7 @@ jobs:
       name: '${{ steps.config.outputs.display-name }}'
       project: '${{ steps.config.outputs.project-id }}'
       version: '${{ steps.meta.outputs.version }}'
-      type: '${{ steps.meta.outputs.type }}'
+      type: '${{ steps.channel.outputs.type }}'
       changelog: '${{ steps.meta.outputs.changelog }}'
     steps:
       - uses: actions/checkout@v7
@@ -34,24 +35,36 @@ jobs:
         uses: radaeli-mc-mods/mc-ci/actions/read-config@main
       - id: meta
         env:
-          RELEASE_TYPE: '${{ steps.config.outputs.release-type }}'
           REF_NAME: '${{ github.ref_name }}'
           REPOSITORY: '${{ github.repository }}'
         run: |
           version=$(bash .mc-ci/scripts/read-version.sh)
           [[ "$REF_NAME" == "v$version" ]] || { echo '::error::Tag does not match mod_version'; exit 1; }
-          type=$RELEASE_TYPE
-          if [[ $type == auto ]]; then
-            case "$version" in *-alpha*) type=alpha;; *-beta*|*-rc*) type=beta;; *) type=release;; esac
-          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "type=$type" >> "$GITHUB_OUTPUT"
           if ! bash .mc-ci/scripts/changelog-section.sh "$version" > "$RUNNER_TEMP/changelog"; then
             previous=$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)
             if [[ -n $previous ]]; then printf 'Changes: https://github.com/%s/compare/%s...%s\n' "$REPOSITORY" "$previous" "$REF_NAME" > "$RUNNER_TEMP/changelog"; else printf 'Changes: https://github.com/%s/tree/%s\n' "$REPOSITORY" "$REF_NAME" > "$RUNNER_TEMP/changelog"; fi
           fi
           delimiter=$(openssl rand -hex 16)
-          { echo "changelog<<$delimiter"; cat "$RUNNER_TEMP/changelog"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+          { echo "changelog<<$delimiter"; cat "$RUNNER_TEMP/changelog"; printf '\nThis release was published from a Github Action\n'; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+      - id: channel
+        env:
+          CF_PROJECT: '${{ steps.config.outputs.project-id }}'
+          CF_API_KEY: '${{ secrets.CURSEFORGE_API_KEY }}'
+        run: |
+          type=beta
+          if [[ -n $CF_API_KEY ]] &&
+            project=$(curl --fail --silent --max-time 15 -H "x-api-key: $CF_API_KEY" "https://api.curseforge.com/v1/mods/$CF_PROJECT") &&
+            latest=$(jq -er '.data.latestFiles | map(select(.isAvailable == true)) | max_by([.fileDate, .id]) | .releaseType' <<< "$project"); then
+            case "$latest" in
+              1) type=release ;;
+              2) type=beta ;;
+              3) type=alpha ;;
+            esac
+          else
+            echo '::notice::CurseForge file history unavailable. Using Beta.'
+          fi
+          echo "type=$type" >> "$GITHUB_OUTPUT"
   build:
     needs: prepare
     runs-on: ubuntu-latest
@@ -113,10 +126,21 @@ jobs:
           LOADERS: '${{ toJSON(matrix.loaders) }}'
           VERSIONS: '${{ toJSON(matrix.gameVersions) }}'
           DEPENDENCIES: '${{ toJSON(matrix.dependencies) }}'
+          JAVA: '${{ matrix.java }}'
         run: |
           for key in LOADERS VERSIONS DEPENDENCIES; do
             { echo "${key,,}<<MC_CI_LIST"; jq -r '.[]' <<< "${!key}"; echo MC_CI_LIST; } >> "$GITHUB_OUTPUT"
           done
+          {
+            echo 'java<<MC_CI_LIST'
+            if jq -e 'index("neoforge") != null' <<< "$LOADERS" > /dev/null &&
+              jq -e 'index("1.21.1") != null' <<< "$VERSIONS" > /dev/null; then
+              printf '21\n25\n'
+            else
+              printf '%s\n' "$JAVA"
+            fi
+            echo MC_CI_LIST
+          } >> "$GITHUB_OUTPUT"
       - name: Publish to CurseForge
         uses: Kira-NT/mc-publish@c23376546a97f5ba7984e94445da359459b14419 # v3.3.2
         with:
@@ -129,6 +153,6 @@ jobs:
           changelog: '${{ needs.prepare.outputs.changelog }}'
           loaders: '${{ steps.metadata.outputs.loaders }}'
           game-versions: '${{ steps.metadata.outputs.versions }}'
-          java: '${{ matrix.java }}'
+          java: '${{ steps.metadata.outputs.java }}'
           dependencies: '${{ steps.metadata.outputs.dependencies }}'
           retry-attempts: 2

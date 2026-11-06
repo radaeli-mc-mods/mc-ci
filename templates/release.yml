@@ -8,3 +8,4 @@ jobs:
     uses: radaeli-mc-mods/mc-ci/.github/workflows/mod-release.yml@v1
     secrets:
       CURSEFORGE_TOKEN: '${{ secrets.CURSEFORGE_TOKEN }}'
+      CURSEFORGE_API_KEY: '${{ secrets.CURSEFORGE_API_KEY }}'

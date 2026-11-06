@@ -18,7 +18,7 @@ First release.
 
 Earlier release.
 EOF
-[[ $(bash "$root/scripts/changelog-section.sh" 1.2.3 "$tmp/CHANGELOG.md") == *'First release.'* ]]
+[[ $(bash "$root/scripts/changelog-section.sh" 1.2.3 "$tmp/CHANGELOG.md") == $'## [1.2.3] - 2026-11-02\n\nFirst release.' ]]
 [[ $(bash "$root/scripts/changelog-section.sh" 1.2.2 "$tmp/CHANGELOG.md") == *'Earlier release.'* ]]
 if bash "$root/scripts/changelog-section.sh" 9.9.9 "$tmp/CHANGELOG.md"; then exit 1; fi
 printf 'Script tests passed\n'
